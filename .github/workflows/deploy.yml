@@ -45,6 +45,11 @@ jobs:
             set -e
             cd ${{ secrets.EC2_PATH }}
             export DEBIAN_FRONTEND=noninteractive
+            # 캐시 정리로 디스크 여유 확보
+            sudo apt-get clean
+            sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+            pip cache purge || true
+            rm -rf ~/.cache/pip ~/.cache/huggingface || true
             if command -v apt-get >/dev/null 2>&1; then
               sudo apt-get update -y
               sudo apt-get install -y python3 python3-venv python3-pip || true
@@ -75,10 +80,14 @@ jobs:
             chmod 600 .env || true
             set -a; . ./.env; set +a
             set +e
+            # 포트 8000 점유 프로세스가 있으면 우선 종료(포트 기준)
+            sudo fuser -k 8000/tcp >/dev/null 2>&1 || true
+            PID=$(sudo lsof -t -i:8000 -sTCP:LISTEN 2>/dev/null || true); [ -n "$PID" ] && sudo kill -TERM $PID || true
+            # 프로세스명 기준 종료(보조)
             pgrep -f "uvicorn src.api.main:app" >/dev/null 2>&1 && pkill -TERM -f "uvicorn src.api.main:app" || true
             set -e
             # PYTHONPATH 보강 후 절대경로로 기동
-            env PYTHONPATH="$PWD:$PWD/src" nohup "${{ secrets.EC2_PATH }}"/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --workers 2 > app.log 2>&1 &
+            env PYTHONPATH="$PWD:$PWD/src" nohup "${{ secrets.EC2_PATH }}"/.venv/bin/python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --workers 1 > app.log 2>&1 &
             echo "Waiting for health..."
             for i in $(seq 1 30); do
               if curl -sf http://127.0.0.1:8000/health >/dev/null; then
@@ -88,5 +97,4 @@ jobs:
             echo "Health check failed. Showing last logs:" >&2
             tail -n 200 app.log || true
             exit 1
-
 
